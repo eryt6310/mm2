@@ -1,145 +1,322 @@
--- MM2 Advanced Script.lua (Оптимизированная версия)
--- Функции: Аим на мардера, автоподбор пистолета, ESP через стены, ноклип, изменение скорости
+-- Universal AimBot & ESP для Roblox
+-- Работает во всех режимах (FPS, TPS, любые игры)
+-- Оптимизированная версия с настройками
 
 local player = game.Players.LocalPlayer
 local mouse = player:GetMouse()
+local camera = workspace.CurrentCamera
 local runService = game:GetService("RunService")
 local players = game:GetService("Players")
-local workspace = game:GetService("Workspace")
-local camera = workspace.CurrentCamera
+local userInput = game:GetService("UserInputService")
 
--- Настройки
+-- ============================================
+-- НАСТРОЙКИ (можно менять)
+-- ============================================
 local Settings = {
-    AimAssist = true,
-    AutoPickup = true,
-    ESP = true,
-    NoClip = false,
-    Speed = 16
+    AimBot = {
+        Enabled = true,
+        Key = "Q",           -- Клавиша активации (зажми для прицеливания)
+        FOV = 200,           -- Радиус поиска цели (пиксели)
+        Smoothness = 0.3,    -- Плавность (0 - мгновенно, 1 - очень плавно)
+        TeamCheck = true,    -- Не стрелять по своим (если есть команды)
+        VisibleCheck = true, -- Стрелять только по видимым целям
+        HitChance = 1,       -- Шанс попадания (0.1 - 1.0)
+        TargetPart = "Head"  -- Часть тела для атаки ("Head", "HumanoidRootPart", "Torso")
+    },
+    ESP = {
+        Enabled = true,
+        Box = true,          -- Прямоугольник вокруг игрока
+        Name = true,         -- Имя игрока
+        Health = true,       -- Полоска здоровья
+        Distance = true,     -- Расстояние до игрока
+        ThroughWalls = true  -- Видеть через стены
+    }
 }
 
--- Оптимизация: кэширование объектов
-local playerList = players:GetPlayers()
-local espObjects = {}
-local espEnabled = true
+-- ============================================
+-- СИСТЕМА ЦЕЛЕЙ
+-- ============================================
+local targets = {}
+local currentTarget = nil
 
--- GUI
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Parent = player.PlayerGui
-ScreenGui.ResetOnSpawn = false
-
-local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 250, 0, 300)
-Frame.Position = UDim2.new(0, 10, 0, 10)
-Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-Frame.BackgroundTransparency = 0.2
-Frame.Active = true
-Frame.Draggable = true
-Frame.Parent = ScreenGui
-
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-Title.Text = "MM2 Script v2.0"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.Font = Enum.Font.SourceSansBold
-Title.TextSize = 18
-Title.Parent = Frame
-
-local function CreateToggle(name, default, y, callback)
-    local Toggle = Instance.new("TextButton")
-    Toggle.Size = UDim2.new(1, -10, 0, 25)
-    Toggle.Position = UDim2.new(0, 5, 0, y)
-    Toggle.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    Toggle.Text = name .. ": OFF"
-    Toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Toggle.Font = Enum.Font.SourceSans
-    Toggle.TextSize = 14
-    Toggle.Parent = Frame
-    
-    local state = default
-    Toggle.MouseButton1Click:Connect(function()
-        state = not state
-        Toggle.Text = name .. ": " .. (state and "ON" or "OFF")
-        callback(state)
-    end)
-    return Toggle
+-- Получение всех игроков
+local function GetPlayers()
+    local list = {}
+    for _, v in pairs(players:GetPlayers()) do
+        if v ~= player and v.Character and v.Character:FindFirstChild("Humanoid") and v.Character.Humanoid.Health > 0 then
+            -- Проверка на команду (если есть)
+            local teamCheck = true
+            if Settings.AimBot.TeamCheck and player.Team and v.Team then
+                teamCheck = player.Team ~= v.Team
+            end
+            if teamCheck then
+                table.insert(list, v)
+            end
+        end
+    end
+    return list
 end
 
-local function CreateSlider(name, min, max, default, y, callback)
-    local SliderFrame = Instance.new("Frame")
-    SliderFrame.Size = UDim2.new(1, -10, 0, 40)
-    SliderFrame.Position = UDim2.new(0, 5, 0, y)
-    SliderFrame.BackgroundTransparency = 1
-    SliderFrame.Parent = Frame
+-- Получение позиции цели
+local function GetTargetPosition(target)
+    local character = target.Character
+    if not character then return nil end
     
-    local Label = Instance.new("TextLabel")
-    Label.Size = UDim2.new(1, 0, 0, 20)
-    Label.Text = name .. ": " .. tostring(default)
-    Label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Label.Font = Enum.Font.SourceSans
-    Label.TextSize = 13
-    Label.BackgroundTransparency = 1
-    Label.Parent = SliderFrame
+    local part = character:FindFirstChild(Settings.AimBot.TargetPart)
+    if not part then
+        part = character:FindFirstChild("HumanoidRootPart")
+    end
+    if not part then
+        part = character:FindFirstChild("Torso")
+    end
+    if not part then
+        part = character:FindFirstChild("Head")
+    end
     
-    local Slider = Instance.new("Frame")
-    Slider.Size = UDim2.new(1, 0, 0, 15)
-    Slider.Position = UDim2.new(0, 0, 0, 20)
-    Slider.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    Slider.Parent = SliderFrame
-    
-    local Fill = Instance.new("Frame")
-    Fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-    Fill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    Fill.Parent = Slider
-    
-    local value = default
-    local dragging = false
-    
-    Slider.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            local x = math.clamp((input.Position.X - Slider.AbsolutePosition.X) / Slider.AbsoluteSize.X, 0, 1)
-            value = math.floor((x * (max - min)) + min)
-            Fill.Size = UDim2.new(x, 0, 1, 0)
-            Label.Text = name .. ": " .. tostring(value)
-            callback(value)
-        end
-    end)
-    
-    Slider.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-    
-    game:GetService("UserInputService").InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local x = math.clamp((input.Position.X - Slider.AbsolutePosition.X) / Slider.AbsoluteSize.X, 0, 1)
-            value = math.floor((x * (max - min)) + min)
-            Fill.Size = UDim2.new(x, 0, 1, 0)
-            Label.Text = name .. ": " .. tostring(value)
-            callback(value)
-        end
-    end)
+    return part and part.Position or nil
 end
 
--- Создание элементов управления
-local yPos = 35
-CreateToggle("Aim Assist", true, yPos, function(state) Settings.AimAssist = state end)
-yPos = yPos + 30
-CreateToggle("Auto Pickup", true, yPos, function(state) Settings.AutoPickup = state end)
-yPos = yPos + 30
-CreateToggle("ESP", true, yPos, function(state) 
-    Settings.ESP = state
-    espEnabled = state
-    if not state then
-        ClearESP()
+-- Проверка видимости
+local function IsVisible(target)
+    if not Settings.AimBot.VisibleCheck then return true end
+    
+    local pos = GetTargetPosition(target)
+    if not pos then return false end
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {player.Character}
+    
+    local result = workspace:Raycast(camera.CFrame.Position, (pos - camera.CFrame.Position).Unit * 500, raycastParams)
+    if not result then return true end
+    
+    local targetChar = target.Character
+    if not targetChar then return false end
+    
+    local hit = result.Instance
+    while hit and hit.Parent do
+        if hit.Parent == targetChar then
+            return true
+        end
+        hit = hit.Parent
+    end
+    return false
+end
+
+-- Поиск лучшей цели
+local function GetClosestTarget()
+    local playersList = GetPlayers()
+    if #playersList == 0 then return nil end
+    
+    local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    local bestTarget = nil
+    local bestDistance = math.huge
+    
+    for _, v in pairs(playersList) do
+        local pos = GetTargetPosition(v)
+        if pos then
+            local screenPos, onScreen = camera:WorldToViewportPoint(pos)
+            if onScreen then
+                local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                if dist < Settings.AimBot.FOV and dist < bestDistance then
+                    if IsVisible(v) then
+                        bestTarget = v
+                        bestDistance = dist
+                    end
+                end
+            end
+        end
+    end
+    
+    return bestTarget
+end
+
+-- ============================================
+-- AИМ БОТ
+-- ============================================
+local isAiming = false
+
+-- Плавное наведение
+local function SmoothAim(targetPos)
+    if not targetPos then return end
+    
+    local currentPos = camera.CFrame.Position
+    local direction = (targetPos - currentPos).Unit
+    local targetCFrame = CFrame.lookAt(currentPos, targetPos)
+    
+    -- Плавное интерполирование
+    local smoothness = Settings.AimBot.Smoothness
+    if smoothness < 0.1 then smoothness = 0.1 end
+    
+    camera.CFrame = camera.CFrame:Lerp(targetCFrame, smoothness)
+end
+
+-- Обработка нажатия клавиши
+userInput.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode[Settings.AimBot.Key] then
+        isAiming = true
     end
 end)
-yPos = yPos + 30
-CreateToggle("NoClip", false, yPos, function(state) Settings.NoClip = state end)
-yPos = yPos + 30
-CreateSlider("Speed", 16, 100, 16, yPos, function(value) Settings.Speed = value end)
+
+userInput.InputEnded:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode[Settings.AimBot.Key] then
+        isAiming = false
+    end
+end)
+
+-- Основной цикл AimBot
+runService.RenderStepped:Connect(function()
+    if not Settings.AimBot.Enabled or not isAiming then 
+        currentTarget = nil
+        return 
+    end
+    
+    -- Выбор цели
+    local target = GetClosestTarget()
+    if not target then 
+        currentTarget = nil
+        return 
+    end
+    
+    local targetPos = GetTargetPosition(target)
+    if not targetPos then 
+        currentTarget = nil
+        return 
+    end
+    
+    -- Применение шанса попадания
+    if math.random() > Settings.AimBot.HitChance then
+        -- Случайное смещение для промаха
+        local offset = Vector3.new(
+            math.random(-5, 5),
+            math.random(-5, 5),
+            math.random(-5, 5)
+        )
+        targetPos = targetPos + offset
+    end
+    
+    currentTarget = target
+    SmoothAim(targetPos)
+end)
+
+-- ============================================
+-- ESP СИСТЕМА
+-- ============================================
+local espObjects = {}
+local espUpdateTime = 0
+
+-- Создание ESP для игрока
+local function CreateESP(target)
+    if not target or target == player or not target.Character then return end
+    
+    -- Удаляем старый ESP
+    if espObjects[target] then
+        espObjects[target]:Destroy()
+        espObjects[target] = nil
+    end
+    
+    local character = target.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    
+    -- Главный Billboard
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 200, 0, 80)
+    billboard.Adornee = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+    billboard.AlwaysOnTop = Settings.ESP.ThroughWalls
+    billboard.MaxDistance = 1000
+    billboard.ResetOnSpawn = false
+    billboard.Parent = billboard.Adornee
+    
+    -- Отрисовка игрока (бокс)
+    if Settings.ESP.Box then
+        local box = Instance.new("Frame")
+        box.Size = UDim2.new(0, 50, 0, 100)
+        box.Position = UDim2.new(0.5, -25, 0.5, -50)
+        box.BackgroundTransparency = 0.6
+        box.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        box.BorderSizePixel = 2
+        box.BorderColor3 = Color3.fromRGB(255, 255, 255)
+        box.Parent = billboard
+    end
+    
+    -- Имя
+    if Settings.ESP.Name then
+        local nameLabel = Instance.new("TextLabel")
+        nameLabel.Size = UDim2.new(1, 0, 0, 20)
+        nameLabel.Position = UDim2.new(0, 0, 0, -10)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.Text = target.Name
+        nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        nameLabel.TextScaled = true
+        nameLabel.Font = Enum.Font.SourceSansBold
+        nameLabel.TextStrokeTransparency = 0.3
+        nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        nameLabel.Parent = billboard
+    end
+    
+    -- Полоска здоровья
+    if Settings.ESP.Health then
+        local healthBg = Instance.new("Frame")
+        healthBg.Size = UDim2.new(0.8, 0, 0, 8)
+        healthBg.Position = UDim2.new(0.1, 0, 0.6, 0)
+        healthBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        healthBg.Parent = billboard
+        
+        local healthBar = Instance.new("Frame")
+        healthBar.Size = UDim2.new(1, 0, 1, 0)
+        healthBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        healthBar.Parent = healthBg
+        
+        -- Обновление здоровья
+        local healthConnection
+        healthConnection = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+            local healthPercent = humanoid.Health / humanoid.MaxHealth
+            healthBar.Size = UDim2.new(healthPercent, 0, 1, 0)
+            
+            if healthPercent > 0.6 then
+                healthBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+            elseif healthPercent > 0.3 then
+                healthBar.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+            else
+                healthBar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            end
+        end)
+        
+        -- Сохраняем связь для очистки
+        healthBar:SetAttribute("Connection", healthConnection)
+    end
+    
+    -- Расстояние
+    if Settings.ESP.Distance then
+        local distLabel = Instance.new("TextLabel")
+        distLabel.Size = UDim2.new(1, 0, 0, 20)
+        distLabel.Position = UDim2.new(0, 0, 0.8, 0)
+        distLabel.BackgroundTransparency = 1
+        distLabel.Text = "0m"
+        distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        distLabel.TextScaled = true
+        distLabel.Font = Enum.Font.SourceSans
+        distLabel.TextStrokeTransparency = 0.5
+        distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        distLabel.Parent = billboard
+        
+        -- Обновление расстояния
+        runService.Heartbeat:Connect(function()
+            if not character or not character:FindFirstChild("HumanoidRootPart") or not player.Character then
+                return
+            end
+            local dist = (character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+            distLabel.Text = math.floor(dist) .. "m"
+        end)
+    end
+    
+    espObjects[target] = billboard
+end
 
 -- Очистка ESP
 local function ClearESP()
@@ -151,297 +328,127 @@ local function ClearESP()
     espObjects = {}
 end
 
--- Создание ESP для игрока
-local function CreateESPForPlayer(target)
-    if not target or target == player or not target.Character then return end
-    
-    local head = target.Character:FindFirstChild("Head")
-    if not head then return end
-    
-    -- Удаляем старый ESP если есть
-    if espObjects[target] then
-        espObjects[target]:Destroy()
-        espObjects[target] = nil
-    end
-    
-    -- Создаем BillboardGui
-    local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0, 120, 0, 40)
-    billboard.Adornee = head
-    billboard.AlwaysOnTop = true -- Видно через стены
-    billboard.MaxDistance = 1000
-    billboard.Parent = head
-    
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Font = Enum.Font.SourceSansBold
-    label.TextSize = 14
-    label.TextStrokeTransparency = 0.3
-    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    label.Parent = billboard
-    
-    -- Определяем роль
-    if head:FindFirstChild("murderer") then
-        label.Text = "🔪 МАРДЕР"
-        label.TextColor3 = Color3.fromRGB(255, 0, 0)
-    elseif head:FindFirstChild("sheriff") then
-        label.Text = "⭐ ШЕРИФ"
-        label.TextColor3 = Color3.fromRGB(0, 150, 255)
-    elseif head:FindFirstChild("innocent") then
-        label.Text = "👤 НЕВИННЫЙ"
-        label.TextColor3 = Color3.fromRGB(0, 255, 0)
-    else
-        label.Text = "❓ НЕИЗВЕСТНО"
-        label.TextColor3 = Color3.fromRGB(255, 255, 0)
-        -- Пытаемся определить роль через другие методы
-        local char = target.Character
-        if char:FindFirstChild("murderer") then
-            label.Text = "🔪 МАРДЕР"
-            label.TextColor3 = Color3.fromRGB(255, 0, 0)
-        elseif char:FindFirstChild("sheriff") then
-            label.Text = "⭐ ШЕРИФ"
-            label.TextColor3 = Color3.fromRGB(0, 150, 255)
-        elseif char:FindFirstChild("innocent") then
-            label.Text = "👤 НЕВИННЫЙ"
-            label.TextColor3 = Color3.fromRGB(0, 255, 0)
-        end
-    end
-    
-    -- Добавляем полоску здоровья
-    local healthBar = Instance.new("Frame")
-    healthBar.Size = UDim2.new(1, 0, 0, 4)
-    healthBar.Position = UDim2.new(0, 0, 1, 2)
-    healthBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-    healthBar.Parent = billboard
-    
-    local healthBg = Instance.new("Frame")
-    healthBg.Size = UDim2.new(1, 0, 0, 4)
-    healthBg.Position = UDim2.new(0, 0, 1, 2)
-    healthBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    healthBg.BackgroundTransparency = 0.5
-    healthBg.Parent = billboard
-    healthBg.ZIndex = 0
-    
-    espObjects[target] = billboard
-    
-    -- Обновление здоровья
-    game:GetService("RunService").Heartbeat:Connect(function()
-        if not target or not target.Character or not target.Character:FindFirstChild("Humanoid") then
-            if espObjects[target] then
-                espObjects[target]:Destroy()
-                espObjects[target] = nil
-            end
-            return
-        end
-        
-        local humanoid = target.Character.Humanoid
-        local healthPercent = humanoid.Health / humanoid.MaxHealth
-        healthBar.Size = UDim2.new(healthPercent, 0, 0, 4)
-        
-        if healthPercent > 0.5 then
-            healthBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-        elseif healthPercent > 0.25 then
-            healthBar.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
-        else
-            healthBar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-        end
-    end)
-end
-
--- Обновление ESP для всех игроков
+-- Обновление ESP
 local function UpdateESP()
-    if not espEnabled then
+    if not Settings.ESP.Enabled then
         ClearESP()
         return
     end
     
-    for _, target in pairs(players:GetPlayers()) do
-        if target ~= player then
-            if target.Character and target.Character:FindFirstChild("Head") then
-                -- Проверяем существует ли ESP
-                if not espObjects[target] or not espObjects[target].Parent then
-                    CreateESPForPlayer(target)
+    for _, v in pairs(players:GetPlayers()) do
+        if v ~= player and v.Character then
+            local humanoid = v.Character:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                if not espObjects[v] or not espObjects[v].Parent then
+                    CreateESP(v)
                 end
             else
-                if espObjects[target] then
-                    espObjects[target]:Destroy()
-                    espObjects[target] = nil
+                if espObjects[v] then
+                    espObjects[v]:Destroy()
+                    espObjects[v] = nil
                 end
             end
         end
     end
-    
-    -- Удаляем ESP для игроков, которых уже нет
-    for target, esp in pairs(espObjects) do
-        if not target or not target.Parent then
-            esp:Destroy()
-            espObjects[target] = nil
-        end
-    end
 end
 
--- Обработчики событий
-players.PlayerAdded:Connect(function(newPlayer)
+-- Обновление ESP с интервалом
+runService.Heartbeat:Connect(function()
+    if tick() - espUpdateTime > 0.5 then
+        UpdateESP()
+        espUpdateTime = tick()
+    end
+end)
+
+-- События игроков
+players.PlayerAdded:Connect(function()
     wait(0.5)
     UpdateESP()
 end)
 
-players.PlayerRemoving:Connect(function(removedPlayer)
-    if espObjects[removedPlayer] then
-        espObjects[removedPlayer]:Destroy()
-        espObjects[removedPlayer] = nil
+players.PlayerRemoving:Connect(function(v)
+    if espObjects[v] then
+        espObjects[v]:Destroy()
+        espObjects[v] = nil
     end
 end)
 
--- Обновляем ESP каждые 0.5 секунды (оптимизация)
-local lastESPUpdate = 0
-game:GetService("RunService").Heartbeat:Connect(function()
-    if tick() - lastESPUpdate > 0.5 then
-        UpdateESP()
-        lastESPUpdate = tick()
-    end
-end)
-
--- AIM ASSIST (на мардера)
-local function GetClosestMurderer()
-    local closest = nil
-    local dist = math.huge
-    for _, v in pairs(players:GetPlayers()) do
-        if v ~= player and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
-            local character = v.Character
-            local head = character:FindFirstChild("Head")
-            if head then
-                local isMurderer = head:FindFirstChild("murderer") or character:FindFirstChild("murderer")
-                if isMurderer then
-                    local pos = character.HumanoidRootPart.Position
-                    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-                        local mag = (pos - player.Character.HumanoidRootPart.Position).Magnitude
-                        if mag < dist then
-                            dist = mag
-                            closest = v
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return closest
-end
-
--- Автострельба (с задержкой для оптимизации)
-local lastShot = 0
-runService.RenderStepped:Connect(function()
-    if Settings.AimAssist and tick() - lastShot > 0.15 then
-        local target = GetClosestMurderer()
-        if target and target.Character then
-            local head = target.Character:FindFirstChild("Head")
-            if head and player.Character and player.Character:FindFirstChild("Head") then
-                -- Проверяем есть ли у игрока пистолет
-                local hasGun = false
-                if player.Character:FindFirstChild("Tool") then
-                    hasGun = true
-                end
-                
-                if hasGun then
-                    local raycastParams = RaycastParams.new()
-                    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-                    raycastParams.FilterDescendantsInstances = {player.Character}
-                    
-                    local rayResult = workspace:Raycast(
-                        player.Character.Head.Position,
-                        (head.Position - player.Character.Head.Position).Unit * 500,
-                        raycastParams
-                    )
-                    
-                    if not rayResult or rayResult.Instance.Parent == target.Character then
-                        -- Стрельба
-                        game:GetService("ReplicatedStorage"):FindFirstChild("Events"):FindFirstChild("Gun"):FireServer("Shoot", head.Position)
-                        lastShot = tick()
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- AUTO PICKUP (подбор пистолета)
-local function FindGun()
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("Tool") and v.Name == "Gun" and v.Parent ~= player.Character then
-            return v
-        end
-        -- Некоторые версии MM2 используют BasePart
-        if v:IsA("BasePart") and v.Name == "Gun" and v.Parent and v.Parent:IsA("Model") then
-            return v.Parent
-        end
-    end
-    return nil
-end
-
-runService.Heartbeat:Connect(function()
-    if Settings.AutoPickup then
-        local gun = FindGun()
-        if gun then
-            -- Пытаемся подобрать разными способами
-            pcall(function()
-                if gun:IsA("Tool") then
-                    player.Character:FindFirstChild("Humanoid"):EquipTool(gun)
-                else
-                    -- Для старых версий
-                    local args = {
-                        [1] = "Pickup",
-                        [2] = gun
-                    }
-                    local event = game:GetService("ReplicatedStorage"):FindFirstChild("Events"):FindFirstChild("Pickup")
-                    if event then
-                        event:FireServer(unpack(args))
-                    end
-                end
-            end)
-        end
-    end
-end)
-
--- NO CLIP (оптимизированный)
-local noclipEnabled = false
-runService.Stepped:Connect(function()
-    if Settings.NoClip ~= noclipEnabled then
-        noclipEnabled = Settings.NoClip
-        if player.Character then
-            for _, v in pairs(player.Character:GetDescendants()) do
-                if v:IsA("BasePart") then
-                    v.CanCollide = not Settings.NoClip
-                end
-            end
-        end
-    end
-    
-    if Settings.NoClip and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-        player.Character.HumanoidRootPart.Velocity = Vector3.new(0, 0, 0)
-    end
-end)
-
--- ИЗМЕНЕНИЕ СКОРОСТИ (оптимизированный)
-local currentSpeed = 16
-runService.Heartbeat:Connect(function()
-    if player.Character and player.Character:FindFirstChild("Humanoid") then
-        local humanoid = player.Character.Humanoid
-        if humanoid.WalkSpeed ~= Settings.Speed then
-            humanoid.WalkSpeed = Settings.Speed
-        end
-    end
-end)
-
--- Защита от ошибок и вывод в консоль
-pcall(function()
-    print("MM2 Script v2.0 загружен успешно!")
-    print("ESP отображается через стены (AlwaysOnTop)")
-end)
-
--- Очистка при выгрузке скрипта
-game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
-    wait(0.5)
+player.CharacterAdded:Connect(function()
+    wait(1)
     ClearESP()
     UpdateESP()
 end)
+
+-- ============================================
+-- GUI НАСТРОЕК (опционально)
+-- ============================================
+local function CreateGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = player.PlayerGui
+    screenGui.Name = "AimBotGUI"
+    
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 220, 0, 250)
+    frame.Position = UDim2.new(0, 10, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    frame.BackgroundTransparency = 0.2
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = screenGui
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    title.Text = "⚡ AimBot & ESP"
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 16
+    title.Parent = frame
+    
+    local function CreateToggle(name, setting, y, callback)
+        local toggle = Instance.new("TextButton")
+        toggle.Size = UDim2.new(1, -10, 0, 25)
+        toggle.Position = UDim2.new(0, 5, 0, y)
+        toggle.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        toggle.Text = name .. ": ON"
+        toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+        toggle.Font = Enum.Font.SourceSans
+        toggle.TextSize = 14
+        toggle.Parent = frame
+        
+        local state = true
+        toggle.MouseButton1Click:Connect(function()
+            state = not state
+            toggle.Text = name .. ": " .. (state and "ON" or "OFF")
+            callback(state)
+        end)
+        return toggle
+    end
+    
+    local y = 35
+    CreateToggle("AimBot", Settings.AimBot.Enabled, y, function(state)
+        Settings.AimBot.Enabled = state
+        if not state then isAiming = false end
+    end)
+    y = y + 30
+    CreateToggle("ESP", Settings.ESP.Enabled, y, function(state)
+        Settings.ESP.Enabled = state
+        if not state then ClearESP() end
+    end)
+    y = y + 30
+    CreateToggle("Через стены", Settings.ESP.ThroughWalls, y, function(state)
+        Settings.ESP.ThroughWalls = state
+        UpdateESP()
+    end)
+end
+
+-- Запуск GUI
+pcall(CreateGUI)
+
+-- ============================================
+-- ВЫВОД В КОНСОЛЬ
+-- ============================================
+print("=== Universal AimBot & ESP ===")
+print("Клавиша для Aim: " .. Settings.AimBot.Key)
+print("ESP активен: " .. tostring(Settings.ESP.Enabled))
+print("================================")
